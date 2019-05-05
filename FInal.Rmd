@@ -1,0 +1,217 @@
+---
+title: "Final Project"
+author: "Limin Tan"
+date: "2019.4.17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setlocale('LC_ALL','C')
+```
+
+
+```{r basicfcn, include=F, echo=F}
+# can add quietly=T option to the require() function
+loadPkg = function(x) { if (!require(x,character.only=T, quietly =T)) { install.packages(x,dep=T,repos="http://cran.us.r-project.org"); if(!require(x,character.only=T)) stop("Package not found") } }
+```
+
+```{r package, include=FALSE}
+#import the packages
+library(prophet)
+library(dplyr)
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(caret)
+library(tm)
+
+
+```
+
+```{r init}
+#overview the data 
+data= read.csv("ks-projects-201801.csv")
+data$date<-as.Date(substr(data$deadline, 1, 11), format="%Y-%m-%d")
+str(data)
+
+#check the missing value and clean the data
+data %>% 
+  select_if(function(x) any(is.na(x))) %>% 
+  summarise_each(funs(sum(is.na(.)))) -> extra_NA
+extra_NA
+head(data)
+
+```
+
+
+
+
+```{r ,include=F}
+#Group the 'usd pledged' by the each day and order by the date
+data <- data %>%
+    select(date, usd.pledged) %>%
+    rename(y=usd.pledged,ds=date)
+data<-aggregate(y ~ ds, data, FUN = length)
+data<-data[order(data$ds), ]   
+head(data)
+
+
+
+
+```
+
+```{r}
+#plot the use 'usd pledged' by the year
+summary(data)
+plot(y ~ ds, data, type = "l")
+
+
+```
+
+
+```{r  ,include=F}
+#Predicting the 'usd pledged' trendency basied on previous date
+m <- prophet(data,daily.seasonality=TRUE)
+future <- make_future_dataframe(m, periods = 365)
+forecast <- predict(m, future)
+
+```
+
+
+```{r, echo=TRUE}
+plot(m, forecast)
+```
+
+
+
+```{r HosmerLemeshow}
+#plot the tredency by different periode range
+prophet_plot_components(m, forecast)
+
+```
+
+
+```{r cros_validation }
+#Using the corr_validation to evaluate the predicting result 
+df.cv <- cross_validation(m, initial = 730, period = 180, horizon = 365, units = 'days')
+head(df.cv)
+```
+
+```{r, echo=TRUE}
+#Using MSE and MAE to show the accuracy of the prediction 
+df.p <- performance_metrics(df.cv)
+mean_mse<-mean(df.p$mse)
+mean_mae<-mean(df.p$mae)
+mean_mse
+mean_mae
+head(df.p)
+
+```
+
+
+```{r, echo=TRUE}
+#import the date and convert the name column into character type
+data= read.csv("ks-projects-201801.csv",nrow=100)
+
+text=data[c('ID','name','main_category')]
+
+(data<- as_tibble(text) %>%
+    mutate(name = as.character(name)))
+
+
+
+```
+
+
+```{r, echo=TRUE}
+#Create tidy text data frame
+
+(text_tokens <- data%>%
+   unnest_tokens(output = word, input = name) %>%
+   # remove numbers
+   filter(!str_detect(word, "^[0-9]*$")) %>%
+   # remove stop words
+   anti_join(get_stopwords(language = "en", source = "snowball")) %>%
+   
+   # # stem the words
+   mutate(word = SnowballC::wordStem(word)))
+
+
+```
+```{r, echo=TRUE}
+#Create document-term matrix
+(text_dtm <- text_tokens%>%
+   # get count of each token in each document
+   count(ID, word) %>%
+   # create a document-term matrix with all features and tf-idf weighting
+   cast_dtm(document = ID, term = word, value = n, weighting = tm::weightTfIdf))
+```
+
+
+
+
+```{r, echo=TRUE}
+##Exploratory analysis
+(text_tfidf <- text_tokens %>%
+   count(main_category, word) %>%
+   bind_tf_idf(term = word, document = main_category, n = n))
+```
+
+
+
+```{r, echo=TRUE}
+# sort the data frame and convert word to a factor column
+plot_congress <- text_tfidf %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word))))
+
+
+
+
+# graph the top 10 tokens for 4 categories
+plot_congress %>%
+  filter(main_category %in% c('Art', 'Fashion','Film & Video','Design')) %>%
+  mutate(main_category = factor(main_category, levels =c('Art', 'Fashion','Film & Video','Design'),
+                        labels = c('Art', 'Fashion','Film & Video','Design'))) %>%
+  group_by(main_category) %>%
+  top_n(5) %>%
+  ungroup() %>%
+  ggplot(aes(word, tf_idf)) +
+  geom_col() +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~main_category, scales = "free") +
+  coord_flip()
+```
+
+```{r, echo=TRUE}
+# #grouby the text_token to find the missing row because the date preprocessing
+#  a<-text_tokens%>%
+#     group_by(ID,main_category) %>%
+#     summarise(count=n())
+# 
+#  b=data$ID[!( data$ID %in%a$ID  )]
+# 
+# #make sure the dimension of the target variable is the same as training matrix
+# `%!in%` <- compose(`!`, `%in%`)
+# h=data %>% filter(
+# 
+#   ID %!in% b
+#   )
+# 
+#Using the random forest to training the date
+text_rf_100 <- train(x = as.matrix(text_dtm),
+                           y=factor(data$main_category),
+                           method = "rf",
+                           ntree = 22,
+                           trControl = trainControl(method = "oob"))
+# c=subset(data,ID==1000598804)
+# c
+```
+
+```{r, echo=TRUE}
+#elvaluate the model
+text_rf_100$finalModel
+```
+
+
